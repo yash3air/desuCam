@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Student Face Enrollment</title>
+<style>
+  :root{
+    --ink:#101826;
+    --paper:#F6F7F5;
+    --line:#D8DCD6;
+    --teal:#0F6E5E;
+    --teal-dark:#0B5347;
+    --amber:#C77D2E;
+    --mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; min-height:100vh; background:var(--paper); color:var(--ink);
+    font-family: 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
+    display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .card{
+    width:100%; max-width:480px; background:#fff; border:1px solid var(--line);
+    border-radius:4px; padding:32px; box-shadow: 0 1px 2px rgba(16,24,38,0.04);
+  }
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--teal); margin:0 0 6px;
+  }
+  h1{ font-size:22px; margin:0 0 4px; letter-spacing:-0.01em; }
+  p.sub{ color:#5B6472; font-size:13.5px; margin:0 0 24px; line-height:1.5; }
+  label{ display:block; font-size:12.5px; font-weight:600; margin:14px 0 6px; color:#39424F; }
+  input[type=text]{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:3px;
+    font-size:14px; font-family:inherit; background:var(--paper);
+  }
+  input[type=text]:focus{ outline:2px solid var(--teal); outline-offset:1px; }
+  .video-wrap{
+    position:relative; margin-top:18px; border-radius:4px; overflow:hidden;
+    background:#0d1420; aspect-ratio:4/3;
+  }
+  video, canvas{ position:absolute; top:0; left:0; width:100%; height:100%; }
+  .status{
+    margin-top:12px; font-family:var(--mono); font-size:12.5px; min-height:18px; color:#5B6472;
+  }
+  .status.ok{ color:var(--teal-dark); }
+  .status.err{ color:#B3441E; }
+  button{
+    margin-top:16px; width:100%; padding:12px; border:none; border-radius:3px;
+    background:var(--teal); color:#fff; font-weight:600; font-size:14px; cursor:pointer;
+    font-family:inherit; transition: background .15s ease;
+  }
+  button:hover{ background:var(--teal-dark); }
+  button:disabled{ background:#A9AFB6; cursor:not-allowed; }
+  .footnote{ font-size:11.5px; color:#8A93A0; margin-top:18px; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <p class="eyebrow">One-time setup</p>
+  <h1>Register your face</h1>
+  <p class="sub">Do this once at the start of the semester. Your face signature is stored so you can be recognised on the attendance link your teacher shares each class.</p>
+
+  <label for="rollNo">Roll number</label>
+  <input type="text" id="rollNo" placeholder="e.g. CS21B045" />
+
+  <label for="name">Full name</label>
+  <input type="text" id="name" placeholder="e.g. Aditi Sharma" />
+
+  <div class="video-wrap">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="status" id="status">Loading face models…</div>
+
+  <button id="captureBtn" disabled>Capture &amp; Enroll</button>
+
+  <p class="footnote">
+    Your face descriptor (a set of numbers describing your face, not a photo) is sent only to
+    your college's own Google Sheet backend. No image is stored.
+  </p>
+</div>
+
+<!-- face-api.js: runs entirely in the browser, free, no API key -->
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script>
+// ⚠️ PASTE your Apps Script Web App URL here (see Code.gs setup instructions)
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzmwwvZwdehuVsOInddE8Z0lFVZxrW_d_no2hKZuBaCZTdeWSSwM9uM-9ZPU-9fYdrUNw/exec';
+const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const statusEl = document.getElementById('status');
+const captureBtn = document.getElementById('captureBtn');
+let currentDescriptor = null;
+
+function setStatus(msg, cls){ statusEl.textContent = msg; statusEl.className = 'status ' + (cls||''); }
+
+async function init(){
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+  await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+  video.srcObject = stream;
+
+  setStatus('Position your face in the frame…');
+  detectLoop();
+}
+
+async function detectLoop(){
+  const opts = new faceapi.TinyFaceDetectorOptions();
+  const result = await faceapi.detectSingleFace(video, opts)
+    .withFaceLandmarks().withFaceDescriptor();
+
+  overlay.width = video.clientWidth; overlay.height = video.clientHeight;
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0,0,overlay.width, overlay.height);
+
+  if (result){
+    const resized = faceapi.resizeResults(result, { width: overlay.width, height: overlay.height });
+    faceapi.draw.drawDetections(overlay, resized);
+    currentDescriptor = Array.from(result.descriptor);
+    captureBtn.disabled = false;
+    setStatus('Face detected — ready to capture.', 'ok');
+  } else {
+    currentDescriptor = null;
+    captureBtn.disabled = true;
+    setStatus('No face detected — center your face in good light.');
+  }
+  requestAnimationFrame(detectLoop);
+}
+
+captureBtn.addEventListener('click', async () => {
+  const rollNo = document.getElementById('rollNo').value.trim();
+  const name = document.getElementById('name').value.trim();
+  if (!rollNo || !name){ setStatus('Enter roll number and name first.', 'err'); return; }
+  if (!currentDescriptor){ setStatus('No face detected right now.', 'err'); return; }
+
+  captureBtn.disabled = true;
+  setStatus('Saving…');
+  try{
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      // text/plain avoids a CORS preflight against Apps Script
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'enroll', rollNo, name, descriptor: currentDescriptor })
+    });
+    const data = await res.json();
+    if (data.success){
+      setStatus('Enrolled successfully. You can close this page.', 'ok');
+    } else {
+      setStatus('Enrollment failed: ' + (data.error || 'unknown error'), 'err');
+      captureBtn.disabled = false;
+    }
+  } catch(err){
+    setStatus('Network error — check the Apps Script URL / your connection.', 'err');
+    captureBtn.disabled = false;
+  }
+});
+
+init().catch(err => setStatus('Camera/model error: ' + err.message, 'err'));
+</script>
+</body>
+</html>
